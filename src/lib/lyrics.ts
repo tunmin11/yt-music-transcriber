@@ -26,6 +26,7 @@ export async function transcribeLyrics(mp3Path: string, language?: string): Prom
   form.append("model", model);
   form.append("response_format", "verbose_json");
   form.append("timestamp_granularities[]", "segment");
+  form.append("timestamp_granularities[]", "word");
   if (language) form.append("language", language);
 
   const res = await fetch(`${base}/audio/transcriptions`, {
@@ -40,11 +41,36 @@ export async function transcribeLyrics(mp3Path: string, language?: string): Prom
   const json = (await res.json()) as {
     text?: string;
     segments?: { start: number; end: number; text: string }[];
+    words?: { start: number; end: number; word: string }[];
   };
-  if (json.segments?.length) {
-    return json.segments
-      .map((s) => ({ start: s.start, end: s.end, text: s.text.trim() }))
-      .filter((s) => s.text.length > 0);
+  return buildSegments(json.segments ?? [], json.words ?? [], json.text);
+}
+
+/** Attaches word timings (returned as one flat list) to the segment they fall in. */
+export function buildSegments(
+  segments: { start: number; end: number; text: string }[],
+  words: { start: number; end: number; word: string }[],
+  fullText?: string,
+): LyricSegment[] {
+  if (segments.length === 0) {
+    return fullText?.trim() ? [{ start: 0, end: 0, text: fullText.trim() }] : [];
   }
-  return json.text ? [{ start: 0, end: 0, text: json.text.trim() }] : [];
+  const sorted = [...words].filter((w) => w.word.trim()).sort((a, b) => a.start - b.start);
+  let wi = 0;
+  return segments
+    .map((s, i) => {
+      const next = segments[i + 1];
+      const segWords: LyricSegment["words"] = [];
+      while (wi < sorted.length && (!next || sorted[wi].start < next.start - 0.01)) {
+        const w = sorted[wi++];
+        segWords.push({ start: w.start, end: w.end, word: w.word.trim() });
+      }
+      return {
+        start: s.start,
+        end: s.end,
+        text: s.text.trim(),
+        ...(segWords.length ? { words: segWords } : {}),
+      };
+    })
+    .filter((s) => s.text.length > 0);
 }

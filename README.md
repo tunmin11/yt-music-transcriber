@@ -1,6 +1,6 @@
 # YT Music Transcriber
 
-Paste a YouTube link → get the **notes as MIDI**, the **chord progression + key**, and the **lyrics**, all synced to the video.
+Paste a YouTube link → get a **guitar chord sheet with the chords above the lyrics**, chord diagrams, the **notes as MIDI**, and the key, all synced to the video.
 
 Next.js (App Router) + a Node.js transcription pipeline. No Python needed.
 
@@ -11,6 +11,10 @@ YouTube URL ─► yt-dlp ─► ffmpeg (mono 22.05 kHz) ─► Basic Pitch (TF.
 ```
 
 ## Features
+
+- **Chords over lyrics**: each chord change is placed above the word being sung when it happens (uses Whisper word timestamps). Intros, solos and outros show as instrumental lines. The current line and chord follow the video; click any chord or word to jump there.
+- **Guitar chord diagrams** for every chord in the song (open shapes where possible, otherwise E/A-shape barres). Hover a chord in the sheet to see its shape.
+- **Transpose and capo**: shift the key, put a capo on, and the sheet shows the shapes you actually play. "Easier shapes" suggests the capo position that avoids the most barre chords.
 
 - **Notes → MIDI** with Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch-ts) (polyphonic, instrument-agnostic).
 - **Chords & key**: chroma template matching (major, minor, 7, maj7, m7, dim, sus2, sus4) with bass-root weighting and smoothing; key via Krumhansl–Kessler profiles.
@@ -80,13 +84,15 @@ src/
     api/jobs/route.ts            POST create job · GET server capabilities
     api/jobs/[id]/route.ts       GET job status + result
     api/jobs/[id]/midi/route.ts  GET .mid download
-  components/                    Transcriber, ResultView, PianoRoll, YouTube player hook
+  components/                    Transcriber, ResultView, SongSheet, ChordDiagram, PianoRoll, YouTube player hook
   lib/
     pipeline.ts                  orchestrates the stages
     youtube.ts                   URL parsing + yt-dlp download
     audio.ts                     ffmpeg decode/encode
     transcribe.ts                Basic Pitch inference + MIDI export
     chords.ts                    chord & key detection
+    guitar.ts                    chord shapes, transpose, capo suggestion
+    sheet.ts                     aligns chords to lyric words
     lyrics.ts                    Whisper API client
     jobs.ts                      in-memory job queue
 scripts/transcribe.ts            CLI

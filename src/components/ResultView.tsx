@@ -1,17 +1,50 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useMemo, useState } from "react";
+import { suggestCapo, transposeChord } from "@/lib/guitar";
 import type { TranscriptionResult } from "@/lib/types";
+import { ChordDiagram } from "./ChordDiagram";
 import { PianoRoll } from "./PianoRoll";
+import { SongSheet } from "./SongSheet";
 import { useYouTubePlayer } from "./useYouTubePlayer";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export function ResultView({ jobId, result }: { jobId: string; result: TranscriptionResult }) {
   const { containerRef, time, seek } = useYouTubePlayer(result.videoId);
-  const chords = result.chords.filter((c) => c.name !== "N");
-  const activeChord = chords.findIndex((c) => time >= c.start && time < c.end);
-  const activeLyric = result.lyrics?.findIndex((l) => time >= l.start && time < l.end) ?? -1;
+  const [transpose, setTranspose] = useState(0);
+  const [capo, setCapo] = useState(0);
+  const [showNotes, setShowNotes] = useState(false);
+
+  const chords = useMemo(() => result.chords.filter((c) => c.name !== "N"), [result.chords]);
+  const keyFlats = useMemo(() => /\b[A-G]b\b/.test(result.key ?? "") || chords.some((c) => /^[A-G]b/.test(c.name)), [result.key, chords]);
+
+  /** Sounding chord after transpose, then the shape you play with the capo on. */
+  const display = useMemo(
+    () => (name: string) => transposeChord(name, transpose - capo, capo > 0 ? false : keyFlats),
+    [transpose, capo, keyFlats],
+  );
+  const suggested = useMemo(() => suggestCapo(chords, transpose), [chords, transpose]);
+
+  // Unique chord shapes in order of first appearance
+  const used = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const c of chords) {
+      const n = display(c.name);
+      if (!seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    }
+    return out;
+  }, [chords, display]);
+  const activeChord = chords.find((c) => time >= c.start && time < c.end);
+  const activeName = activeChord ? display(activeChord.name) : null;
+
+  const keyLabel = result.key
+    ? `${transposeChord(result.key.split(" ")[0], transpose, keyFlats)} ${result.key.split(" ")[1] ?? ""}`.trim()
+    : "Unknown key";
 
   const downloadJson = () => {
     const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
@@ -28,7 +61,7 @@ export function ResultView({ jobId, result }: { jobId: string; result: Transcrip
         <div>
           <h2 className="text-xl font-semibold">{result.title}</h2>
           <p className="mt-1 text-sm text-muted">
-            {result.key ?? "Unknown key"} · {fmt(result.durationSeconds)} · {result.notes.length} notes · {chords.length} chord changes
+            Key: {keyLabel} · {fmt(result.durationSeconds)} · {chords.length} chord changes
           </p>
         </div>
         <div className="flex gap-2">
@@ -44,28 +77,55 @@ export function ResultView({ jobId, result }: { jobId: string; result: Transcrip
         </div>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-6">
-          <div ref={containerRef} className="aspect-video w-full overflow-hidden rounded-lg border border-line bg-black" />
-          <PianoRoll notes={result.notes} chords={result.chords} duration={result.durationSeconds} time={time} onSeek={seek} />
-        </div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div ref={containerRef} className="aspect-video w-full overflow-hidden rounded-lg border border-line bg-black" />
 
-        <aside className="space-y-6">
-          <Panel title="Chords">
-            <ChordSheet chords={chords} active={activeChord} onSeek={seek} />
-          </Panel>
-          <Panel title="Lyrics">
-            {result.lyrics && result.lyrics.length > 0 ? (
-              <Lyrics lines={result.lyrics} active={activeLyric} onSeek={seek} />
-            ) : (
-              <p className="text-sm text-muted">{result.lyricsNote ?? "Lyrics were not requested."}</p>
+        <Panel title="Guitar">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <Stepper label="Transpose" value={transpose} onChange={setTranspose} min={-11} max={11} format={(v) => (v > 0 ? `+${v}` : `${v}`)} />
+              <Stepper label="Capo" value={capo} onChange={setCapo} min={0} max={9} format={(v) => (v === 0 ? "none" : `fret ${v}`)} />
+            </div>
+            {suggested !== capo && (
+              <button
+                onClick={() => setCapo(suggested)}
+                className="w-full rounded-md border border-dashed border-accent/40 px-3 py-2 text-left text-xs text-muted hover:border-accent hover:text-foreground"
+              >
+                Easier shapes: <span className="font-semibold text-accent">{suggested === 0 ? "no capo" : `capo ${suggested}`}</span>
+              </button>
             )}
-          </Panel>
-        </aside>
+            {capo > 0 && <p className="text-xs text-muted">Chord names below are the shapes you play with the capo on fret {capo}.</p>}
+            <div className="grid max-h-80 grid-cols-4 gap-x-0 gap-y-2 overflow-y-auto">
+              {used.map((n) => (
+                <ChordDiagram key={n} name={n} size={68} active={n === activeName} />
+              ))}
+            </div>
+          </div>
+        </Panel>
       </div>
+
+      <Panel title="Chords + lyrics">
+        <SongSheet
+          chords={result.chords}
+          lyrics={result.lyrics}
+          lyricsNote={result.lyricsNote}
+          time={time}
+          onSeek={seek}
+          display={display}
+        />
+      </Panel>
+
+      <div>
+        <button onClick={() => setShowNotes((v) => !v)} className="mb-3 text-sm text-muted hover:text-foreground">
+          {showNotes ? "▾" : "▸"} Notes (piano roll, {result.notes.length} notes)
+        </button>
+        {showNotes && (
+          <PianoRoll notes={result.notes} chords={result.chords} duration={result.durationSeconds} time={time} onSeek={seek} />
+        )}
+      </div>
+
       <p className="text-xs text-muted">
-        Automatic transcription works best on a single instrument (solo piano, guitar). Full band mixes give rough notes; chords are
-        usually more reliable than individual notes.
+        Chords and lyrics are detected automatically, so expect some mistakes. They are most accurate on clear recordings with one or two instruments.
       </p>
     </section>
   );
@@ -80,71 +140,34 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function ChordSheet({
-  chords,
-  active,
-  onSeek,
+function Stepper({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  format,
 }: {
-  chords: TranscriptionResult["chords"];
-  active: number;
-  onSeek: (t: number) => void;
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+  format: (v: number) => string;
 }) {
-  const ref = useAutoScroll(active);
-  if (chords.length === 0) return <p className="text-sm text-muted">No chords detected.</p>;
+  const btn = "h-7 w-7 rounded border border-line text-base leading-none hover:bg-background disabled:opacity-30";
   return (
-    <div ref={ref} className="flex max-h-72 flex-wrap gap-1.5 overflow-y-auto pr-1">
-      {chords.map((c, i) => (
-        <button
-          key={`${c.start}-${i}`}
-          data-active={i === active}
-          onClick={() => onSeek(c.start)}
-          title={`${fmt(c.start)} – ${fmt(c.end)}`}
-          className={`rounded px-2.5 py-1 font-mono text-sm transition-colors ${
-            i === active ? "bg-accent text-background" : "bg-background hover:bg-line"
-          }`}
-        >
-          {c.name}
+    <div>
+      <div className="mb-1 text-xs text-muted">{label}</div>
+      <div className="flex items-center gap-2">
+        <button className={btn} disabled={value <= min} onClick={() => onChange(value - 1)} aria-label={`${label} down`}>
+          −
         </button>
-      ))}
+        <span className="min-w-12 text-center font-mono text-sm">{format(value)}</span>
+        <button className={btn} disabled={value >= max} onClick={() => onChange(value + 1)} aria-label={`${label} up`}>
+          +
+        </button>
+      </div>
     </div>
   );
-}
-
-function Lyrics({
-  lines,
-  active,
-  onSeek,
-}: {
-  lines: NonNullable<TranscriptionResult["lyrics"]>;
-  active: number;
-  onSeek: (t: number) => void;
-}) {
-  const ref = useAutoScroll(active);
-  return (
-    <div ref={ref} className="max-h-96 space-y-1 overflow-y-auto pr-1">
-      {lines.map((l, i) => (
-        <button
-          key={`${l.start}-${i}`}
-          data-active={i === active}
-          onClick={() => onSeek(l.start)}
-          className={`block w-full rounded px-2 py-1 text-left text-sm transition-colors ${
-            i === active ? "bg-accent-2/15 text-accent-2" : "text-foreground/80 hover:bg-background"
-          }`}
-        >
-          <span className="mr-2 font-mono text-xs text-muted">{fmt(l.start)}</span>
-          {l.text}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Keeps the active item visible inside a scrolling list. */
-function useAutoScroll(active: number) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current?.querySelector<HTMLElement>('[data-active="true"]');
-    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [active]);
-  return ref;
 }

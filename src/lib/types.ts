@@ -28,10 +28,18 @@ export interface ChordSegment {
   confidence: number;
 }
 
+export interface LyricWord {
+  start: number;
+  end: number;
+  word: string;
+}
+
 export interface LyricSegment {
   start: number;
   end: number;
   text: string;
+  /** Word-level timing, when the speech-to-text API provides it */
+  words?: LyricWord[];
 }
 
 export interface TranscriptionResult {
